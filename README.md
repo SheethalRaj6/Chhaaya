@@ -24,6 +24,16 @@ docker compose up --build
 curl localhost:8000/health
 ```
 
+## Database and migrations
+
+Everything Chhaaya stores lives in one Postgres 16 database with pgvector: users (patients and ASHAs), every WhatsApp message in and out, escalation cases, medicine reminders and their doses, and the knowledge-base chunks with their 1024-dimensional embeddings. Inbound messages double as the worker's queue: each has a status the worker claims with `SELECT ... FOR UPDATE SKIP LOCKED`, and the unique WhatsApp message id means a retried webhook delivery is never stored twice. Chunks are searched by cosine similarity through an HNSW index. The tables are defined in `src/chhaaya/db.py` and built by Alembic migrations in `migrations/`; `docker compose up` applies them before the app and worker start, and the tests apply them to an empty database in a throwaway container (Docker must be running).
+
+```bash
+docker compose run --rm migrate                          # apply migrations
+uv run alembic revision --autogenerate -m "add x"        # draft a migration after changing db.py
+uv run pytest tests/test_migrations.py
+```
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and [AGENTS.md](AGENTS.md) for the rules every change and coding agent follows.
