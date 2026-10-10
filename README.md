@@ -44,6 +44,15 @@ uv run python -c 'from chhaaya.danger_signs import detect; print(detect("bachcha
 uv run pytest tests/test_danger_signs.py
 ```
 
+## Knowledge corpus
+
+The Q&A agent answers only from a small set of Indian public-health documents, so they are chosen by hand. `data/sources.csv` lists each one (NHM ASHA modules, the MCP card, MoHFW guidelines on fever, diarrhoea, anaemia, immunisation, pregnancy, NCDs and TB, and ICMR Standard Treatment Workflows) with its title, publisher, year, URL and why it is in. `chhaaya.corpus` downloads the PDFs to `data/pdfs/` and writes `data/chunks.jsonl`; neither is committed. It reads each page with PyMuPDF, drops running headers and footers (margin lines repeated on many pages), page numbers and contents-page lines, and treats lines in a larger font, or short all-bold blocks, as section headings. Each section is cut into chunks of 300 to 500 tokens, counted with the BGE-M3 tokenizer the embeddings will use, at paragraph or sentence boundaries; a chunk never crosses a section, so a short section stays one smaller chunk. Every chunk keeps the document's title, publisher, year and URL, its section heading, and the PDF page it starts on. The first run downloads the tokenizer from Hugging Face. Embedding and loading the chunks is issue #5.
+
+```bash
+uv run python -m chhaaya.corpus          # download what's missing, then rebuild data/chunks.jsonl
+uv run pytest tests/test_corpus.py
+```
+
 ## WhatsApp webhook
 
 Messages reach Chhaaya through the WhatsApp Cloud API. `POST /webhook` checks Meta's `X-Hub-Signature-256` signature against the app secret and rejects anything unsigned or forged. It stores each text, voice note and photo as a pending message keyed by its WhatsApp message id, so a retried delivery is ignored, and answers `200` straight away; the worker does the rest. `GET /webhook` answers Meta's verification challenge. `src/chhaaya/whatsapp.py` is the one client for sending text and audio, uploading media and downloading what patients send.
