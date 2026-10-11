@@ -37,15 +37,32 @@ MAX_TOKENS = 500
 MARGIN = 0.1
 # A margin line repeated (digits aside) on this share of pages is a running header.
 REPEATED = 0.3
-# Larger than body text by this factor makes a line a heading.
+# A section starts at a heading set at least this much larger than body text.
+# Bold body-size lines ("Remember:", "Key messages") stay inside their section.
 HEADING_SCALE = 1.15
 HEADING_MAX_WORDS = 15
+# Text this much smaller than body text is a figure or chart label: dropped.
+LABEL_SCALE = 0.65
+# A contents page sits in the first CONTENTS_SHARE of a document, and most of
+# its lines end in a page number.
+CONTENTS_SHARE = 0.1
 
 _PAGE_NUMBER = re.compile(
     r"^[\s\-–—|]*(page\s*)?([0-9]+|[ivxlc]+)(\s*(of|/)\s*[0-9]+)?[\s\-–—|]*$",
     re.IGNORECASE,
 )
 _CONTENTS_LINE = re.compile(r"(\.\s?){4,}\s*[0-9ivxlc]+\s*$", re.IGNORECASE)
+# A contents line: "Role of ASHA 7", or a bare "7" or "1." in a column layout.
+_LISTED = re.compile(r"(.*[^\W\d_].*\s[0-9]{1,3}|[0-9]{1,3}\.?)$")
+_LIGATURES = str.maketrans(
+    {"\ufb00": "ff", "\ufb01": "fi", "\ufb02": "fl", "\ufb03": "ffi", "\ufb04": "ffl"}
+)
+# Some fonts leave a space after a ligature glyph: "\ufb01 ve" for "five".
+_LIGATURE_GAP = re.compile(r"([\ufb00-\ufb04]) (?=[a-z])")
+# Private-use code points (symbol-font bullets) and control characters.
+_JUNK = re.compile(r"[\x00-\x08\x0b-\x1f\ue000-\uf8ff]")
+_CONTENTS_TITLES = {"contents", "table of contents", "content", "index"}
+_WORD = re.compile(r"[^\W\d_]{2,}")
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 TokenCounter = Callable[[str], int]
@@ -165,6 +182,11 @@ def chunk_source(source: Source, pdf: Path, count_tokens: TokenCounter) -> list[
     return chunks
 
 
+def clean_text(text: str) -> str:
+    text = _LIGATURE_GAP.sub(r"\1", text).translate(_LIGATURES)
+    return " ".join(_JUNK.sub(" ", text).split())
+
+
 def _read_lines(pdf: Path) -> list[list[list[_Line]]]:
     """Pages, each a list of text blocks, each a list of lines."""
     pages = []
@@ -175,13 +197,13 @@ def _read_lines(pdf: Path) -> list[list[list[_Line]]]:
             for block in page.get_text("dict", sort=True)["blocks"]:
                 lines = []
                 for line in block.get("lines", []):
-                    spans = [s for s in line["spans"] if s["text"].strip()]
+                    spans = [s for s in line["spans"] if clean_text(s["text"])]
                     if not spans:
                         continue
                     main = max(spans, key=lambda s: len(s["text"]))
                     lines.append(
                         _Line(
-                            text=" ".join("".join(s["text"] for s in spans).split()),
+                            text=clean_text("".join(s["text"] for s in spans)),
                             size=round(main["size"], 1),
                             bold=all(
                                 s["flags"] & 16 or "bold" in s["font"].lower()
@@ -219,9 +241,20 @@ def _strip_furniture(pages: list[list[list[_Line]]]) -> list[list[list[_Line]]]:
         key = _margin_key(line)
         return key is None or not (key in repeated or _PAGE_NUMBER.match(line.text))
 
+    def contents(number: int, blocks: list[list[_Line]]) -> bool:
+        lines = [line.text for block in blocks for line in block]
+        early = number < max(5, CONTENTS_SHARE * len(pages))
+        if not early or len(lines) < 6:
+            return False
+        titled = any(text.lower() in _CONTENTS_TITLES for text in lines)
+        listed = sum(bool(_LISTED.match(text)) for text in lines) / len(lines)
+        return listed >= 0.5 or (titled and listed >= 0.3)
+
     return [
-        [kept for block in blocks if (kept := [line for line in block if keep(line)])]
-        for blocks in pages
+        []
+        if contents(number, blocks)
+        else [kept for block in blocks if (kept := [ln for ln in block if keep(ln)])]
+        for number, blocks in enumerate(pages)
     ]
 
 
@@ -239,15 +272,18 @@ def _sections(pages: list[list[list[_Line]]]) -> list[_Section]:
         text = " ".join(line.text for line in block)
         if len(text.split()) > HEADING_MAX_WORDS or not re.search(r"[^\W\d_]", text):
             return False
-        larger = all(line.size >= body * HEADING_SCALE for line in block)
-        bold_alone = len(block) <= 2 and all(line.bold for line in block)
-        return larger or bold_alone
+        return all(line.size >= body * HEADING_SCALE for line in block)
 
     sections = [_Section(heading="", page=1, paragraphs=[])]
     for number, blocks in enumerate(pages, start=1):
         for block in blocks:
+            block = [line for line in block if line.size >= body * LABEL_SCALE]
+            if not block or not _WORD.search(" ".join(line.text for line in block)):
+                continue
             if heading(block):
                 text = " ".join(line.text for line in block)
+                if text.lower() in _CONTENTS_TITLES:
+                    continue  # a chapter's own "Contents" box is not a section
                 current = sections[-1]
                 if not current.paragraphs and current.page == number:
                     # A heading straight under another, like a chapter title
