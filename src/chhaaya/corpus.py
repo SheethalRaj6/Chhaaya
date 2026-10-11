@@ -112,6 +112,60 @@ _REPAIRED_WORDS = {
     "participate",
 }
 
+# Complete prose boxes checked against the posters. Algorithms, dosage tables,
+# figure labels, references and contributor pages are outside these rectangles.
+# Coordinates are fractions of the displayed page; digests pin each layout.
+CURATED_EXCERPTS = {
+    "icmr_stw_diabetes_type_2": (
+        "bcad0bfca7c2ec3a10a9b695cec7b1f2f91881bad01d05d0ed3c94925ad820fb",
+        [
+            (1, "Symptoms", (0.18, 0.14, 0.49, 0.29)),
+            (1, "Monitoring", (0.015, 0.523, 0.495, 0.605)),
+            (1, "Referrals", (0.505, 0.523, 0.985, 0.605)),
+        ],
+    ),
+    "icmr_stw_hypertension": (
+        "bffc8acfa65ce92ec2d9bb914f8232b397603b8c1b0a30f1906261492a0f2ab0",
+        [
+            (1, "Risk factors", (0.46, 0.112, 0.57, 0.228)),
+            (1, "Lifestyle modification", (0.005, 0.731, 0.25, 0.853)),
+            (1, "Red flags signs", (0.765, 0.731, 0.999, 0.853)),
+        ],
+    ),
+    "icmr_stw_fever_children": (
+        "db1e43075e879b04cdc8ad471d83b73eddc9fd156578ae4a7f2240984af778ce",
+        [
+            (1, "Step 2: Consider hospitalization", (0.205, 0.623, 0.391, 0.829)),
+            (1, "Step 3: Consider referral", (0.399, 0.623, 0.602, 0.829)),
+        ],
+    ),
+    "icmr_stw_diarrhoea_children": (
+        "22a2fcdfb18c7a5c1fce3c366090d4b34041a9ba8cd4372683e1cc7e96ca7b38",
+        [
+            (1, "Refer to hospital", (0.73, 0.109, 0.99, 0.271)),
+            (1, "Patient education", (0.305, 0.515, 0.645, 0.582)),
+            (
+                1,
+                "Plan A: Danger signs, return immediately",
+                (0.018, 0.695, 0.29, 0.745),
+            ),
+        ],
+    ),
+    "icmr_stw_paediatric_tb": (
+        "f459aff5130796ce2f3b3f952e885087e906d5e225f9a4a992c0dc197e1e08f0",
+        [
+            (8, "Abdominal tuberculosis: When to refer", (0.77, 0.708, 0.997, 0.88)),
+            (10, "Lymph node tuberculosis: When to refer", (0.53, 0.615, 0.997, 0.728)),
+            (
+                11,
+                "Osteoarticular tuberculosis: When to refer",
+                (0.496, 0.713, 0.997, 0.798),
+            ),
+            (12, "Tubercular meningitis: Referral", (0.65, 0.744, 0.997, 0.873)),
+        ],
+    ),
+}
+
 
 @dataclass(frozen=True)
 class Source:
@@ -220,7 +274,21 @@ def download(sources: Iterable[Source], directory: Path, http: httpx2.Client) ->
 
 def chunk_source(source: Source, pdf: Path, count_tokens: TokenCounter) -> list[Chunk]:
     chunks = []
-    for section in _sections(_strip_furniture(_read_lines(pdf))):
+    if curated := CURATED_EXCERPTS.get(source.id):
+        digest, excerpts = curated
+        if hashlib.sha256(pdf.read_bytes()).hexdigest() != digest:
+            raise ValueError(f"{source.id}: unreviewed poster edition or layout")
+        sections = []
+        for page, heading, bounds in excerpts:
+            blocks = _read_lines(pdf, clips={page: bounds})[page - 1]
+            if not blocks:
+                raise ValueError(f"{source.id}: page {page}: empty excerpt {heading}")
+            sections.append(
+                _Section(heading, page, [(page, _join(block)) for block in blocks])
+            )
+    else:
+        sections = _sections(_strip_furniture(_read_lines(pdf)))
+    for section in sections:
         for page, text in _pack(section.paragraphs, count_tokens):
             chunks.append(
                 Chunk(
@@ -244,14 +312,27 @@ def clean_text(text: str) -> str:
     return " ".join(_JUNK.sub(" ", text).split())
 
 
-def _read_lines(pdf: Path) -> list[list[list[_Line]]]:
+def _read_lines(
+    pdf: Path,
+    *,
+    clips: dict[int, tuple[float, float, float, float]] | None = None,
+) -> list[list[list[_Line]]]:
     """Pages, each a list of text blocks, each a list of lines."""
     pages = []
     with pymupdf.open(pdf) as doc:
         repairs = GLYPH_REPAIRS.get(hashlib.sha256(pdf.read_bytes()).hexdigest(), {})
         _repair_fonts(doc, repairs)
         for page in doc:
+            number = len(pages) + 1
+            if clips is not None and number not in clips:
+                pages.append([])
+                continue
             height = page.rect.height
+            clip = None
+            if clips is not None:
+                x0, y0, x1, y1 = clips[number]
+                width = page.rect.width
+                clip = pymupdf.Rect(x0 * width, y0 * height, x1 * width, y1 * height)
             blocks = []
             # Unknown glyphs must remain visible as errors, not guessed CIDs.
             flags = pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_USE_CID_FOR_UNKNOWN_UNICODE
@@ -264,6 +345,14 @@ def _read_lines(pdf: Path) -> list[list[list[_Line]]]:
                         for s in line["spans"]
                         if not s["font"].lower().startswith("wingdings")
                         and s["text"].strip()
+                        and (clip is None or clip.contains(pymupdf.Rect(s["bbox"])))
+                        # The reviewed ICMR posters overlay a large diagonal
+                        # Arial watermark, whose clipped letters are not prose.
+                        and not (
+                            clips is not None
+                            and s["font"] == "Arial"
+                            and s["size"] > 140
+                        )
                     ]
                     if not spans:
                         continue
@@ -275,7 +364,10 @@ def _read_lines(pdf: Path) -> list[list[list[_Line]]]:
                             )
                     main = max(spans, key=lambda s: len(s["text"]))
                     # PDF text coordinates precede the page's display rotation.
-                    rect = pymupdf.Rect(line["bbox"]) * page.rotation_matrix
+                    rect = pymupdf.Rect(spans[0]["bbox"])
+                    for span in spans[1:]:
+                        rect |= pymupdf.Rect(span["bbox"])
+                    rect *= page.rotation_matrix
                     text = "".join(s["text"] for s in spans)
                     if repairs:
                         text = _REPAIRED_GAP.sub(
@@ -286,9 +378,12 @@ def _read_lines(pdf: Path) -> list[list[list[_Line]]]:
                             ),
                             text,
                         )
+                    text = clean_text(text)
+                    if not text or (clips is not None and text == "•"):
+                        continue
                     lines.append(
                         _Line(
-                            text=clean_text(text),
+                            text=text,
                             size=round(main["size"], 1),
                             bold=all(
                                 s["flags"] & 16 or "bold" in s["font"].lower()

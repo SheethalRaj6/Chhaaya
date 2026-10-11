@@ -466,6 +466,7 @@ def test_curated_poster_excerpts_keep_context_and_exclude_flowcharts(
         page = doc.new_page(width=600, height=800)
         page.insert_text((50, 120), "When to refer", fontsize=15)
         page.insert_text((50, 150), "If the child cannot drink, refer to hospital.")
+        page.insert_text((550, 170), "Figure title", fontsize=11)
         page.insert_text((50, 450), "YES: Give first line treatment.")
         page.insert_text((350, 550), "NO: Further investigation.")
         page.draw_line((50, 470), (350, 530))
@@ -480,7 +481,11 @@ def test_curated_poster_excerpts_keep_context_and_exclude_flowcharts(
 
     chunks = chunk_source(SOURCE, pdf, words)
     assert [(c.page, c.section, c.text) for c in chunks] == [
-        (1, "When to refer", "When to refer If the child cannot drink, refer to hospital.")
+        (
+            1,
+            "When to refer",
+            "When to refer If the child cannot drink, refer to hospital.",
+        )
     ]
 
     changed = tmp_path / "changed-poster.pdf"
