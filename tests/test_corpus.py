@@ -356,12 +356,19 @@ def test_failed_build_preserves_previous_complete_corpus(tmp_path: Path, monkeyp
         doc.new_page()
         doc.save(pdfs / "scanned.pdf")
     scanned = Source("scanned", "Scanned", "MoHFW", 2020, SOURCE.url, "test")
+    scanned = replace(
+        scanned, sha256=hashlib.sha256((pdfs / "scanned.pdf").read_bytes()).hexdigest()
+    )
+    source = replace(
+        SOURCE,
+        sha256=hashlib.sha256((pdfs / "asha_module_x.pdf").read_bytes()).hexdigest(),
+    )
     output = tmp_path / "chunks.jsonl"
     previous = '{"id":"previous:1","text":"Previously verified corpus"}\n'
     output.write_text(previous)
     monkeypatch.setattr(corpus, "PDFS", pdfs)
     monkeypatch.setattr(corpus, "CHUNKS", output)
-    monkeypatch.setattr(corpus, "read_sources", lambda: [SOURCE, scanned])
+    monkeypatch.setattr(corpus, "read_sources", lambda: [source, scanned])
     monkeypatch.setattr(corpus, "_bge_m3_counter", lambda: words)
 
     with pytest.raises(SystemExit, match="scanned: no text extracted"):
@@ -370,7 +377,7 @@ def test_failed_build_preserves_previous_complete_corpus(tmp_path: Path, monkeyp
     assert output.read_text() == previous
     assert not output.with_suffix(".part").exists()
 
-    monkeypatch.setattr(corpus, "read_sources", lambda: [SOURCE])
+    monkeypatch.setattr(corpus, "read_sources", lambda: [source])
     corpus.main()
     built = [json.loads(line) for line in output.read_text().splitlines()]
     assert {chunk["source_id"] for chunk in built} == {SOURCE.id}
@@ -411,6 +418,9 @@ def test_download_fetches_missing_pdfs_and_refuses_anything_else(tmp_path: Path)
     )
     kept = Source("kept", "Kept", "MoHFW", 2020, "https://example.org/kept.pdf", "-")
     (tmp_path / "kept.pdf").write_bytes(b"%PDF-1.7 already here")
+    good = replace(good, sha256=hashlib.sha256(b"%PDF-1.7 fake").hexdigest())
+    moved = replace(moved, sha256=good.sha256)
+    kept = replace(kept, sha256=hashlib.sha256(b"%PDF-1.7 already here").hexdigest())
 
     with pytest.raises(DownloadError, match="moved"):
         download([good, moved, kept], tmp_path, http)
@@ -451,7 +461,7 @@ def test_download_rejects_a_wrong_cached_edition_and_wrong_remote_bytes(tmp_path
 def test_every_source_is_listed_with_what_a_citation_needs():
     with SOURCES.open(newline="", encoding="utf-8") as f:
         header = next(csv.reader(f))
-    assert header == ["id", "title", "publisher", "year", "url", "reason"]
+    assert header == ["id", "title", "publisher", "year", "url", "reason", "sha256"]
 
     sources = read_sources(SOURCES)
     assert len({s.id for s in sources}) == len(sources)

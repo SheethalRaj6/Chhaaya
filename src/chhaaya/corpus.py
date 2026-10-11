@@ -121,6 +121,7 @@ class Source:
     year: int
     url: str
     reason: str
+    sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -176,6 +177,7 @@ def read_sources(path: Path = SOURCES) -> list[Source]:
                     year=int(row["year"]),
                     url=row["url"],
                     reason=row["reason"],
+                    sha256=row["sha256"],
                 )
             )
     return sources
@@ -187,7 +189,12 @@ def download(sources: Iterable[Source], directory: Path, http: httpx2.Client) ->
     failures = []
     for source in sources:
         target = directory / f"{source.id}.pdf"
+        if not re.fullmatch(r"[0-9a-f]{64}", source.sha256):
+            failures.append(f"{source.id}: no verified PDF checksum in sources.csv")
+            continue
         if target.exists():
+            if hashlib.sha256(target.read_bytes()).hexdigest() != source.sha256:
+                failures.append(f"{source.id}: cached PDF checksum mismatch: {target}")
             continue
         try:
             response = http.get(source.url)
@@ -198,6 +205,11 @@ def download(sources: Iterable[Source], directory: Path, http: httpx2.Client) ->
         if not response.content.startswith(b"%PDF"):
             kind = response.headers.get("content-type", "unknown type")
             failures.append(f"{source.id}: {source.url} did not return a PDF ({kind})")
+            continue
+        if hashlib.sha256(response.content).hexdigest() != source.sha256:
+            failures.append(
+                f"{source.id}: downloaded PDF checksum mismatch: {source.url}"
+            )
             continue
         partial = target.with_suffix(".part")
         partial.write_bytes(response.content)
