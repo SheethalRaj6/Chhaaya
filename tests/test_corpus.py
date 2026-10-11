@@ -190,7 +190,7 @@ def test_numeric_table_cells_survive_while_margin_page_numbers_go(tmp_path: Path
                 (260, "Blood pressure threshold in mmHg", "180 / 120"),
             ):
                 page.insert_text((50, y), label, fontsize=10)
-                page.insert_text((300, y + 30), value, fontsize=10)
+                page.insert_text((300, y + 30), value, fontsize=5)
         doc.save(pdf)
 
     text = " ".join(chunk.text for chunk in chunk_source(SOURCE, pdf, words))
