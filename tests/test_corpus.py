@@ -1,6 +1,7 @@
 import csv
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import httpx2
@@ -417,6 +418,34 @@ def test_download_fetches_missing_pdfs_and_refuses_anything_else(tmp_path: Path)
     assert (tmp_path / "good.pdf").read_bytes() == b"%PDF-1.7 fake"
     assert not (tmp_path / "moved.pdf").exists()
     assert "https://example.org/kept.pdf" not in requested
+
+
+def test_download_rejects_a_wrong_cached_edition_and_wrong_remote_bytes(tmp_path):
+    verified = b"%PDF-1.7 reviewed edition"
+    source = replace(SOURCE, sha256=hashlib.sha256(verified).hexdigest())
+    cached = tmp_path / f"{source.id}.pdf"
+    cached.write_bytes(b"%PDF-1.7 unrelated book")
+    http = httpx2.Client(
+        transport=httpx2.MockTransport(
+            lambda request: httpx2.Response(200, content=b"%PDF-1.7 wrong edition")
+        )
+    )
+
+    with pytest.raises(DownloadError, match="checksum"):
+        download([source], tmp_path, http)
+    assert cached.read_bytes() == b"%PDF-1.7 unrelated book"
+    cached.unlink()
+    with pytest.raises(DownloadError, match="checksum"):
+        download([source], tmp_path, http)
+    assert not cached.exists()
+
+    http = httpx2.Client(
+        transport=httpx2.MockTransport(
+            lambda request: httpx2.Response(200, content=verified)
+        )
+    )
+    download([source], tmp_path, http)
+    assert cached.read_bytes() == verified
 
 
 def test_every_source_is_listed_with_what_a_citation_needs():
