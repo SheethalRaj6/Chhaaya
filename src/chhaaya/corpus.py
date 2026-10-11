@@ -336,6 +336,7 @@ EXCLUDED_REGIONS = {
         71: (0.0, 0.0, 1.0, 1.0),
         73: (0.0, 0.0, 1.0, 1.0),
         74: (0.0, 0.0, 1.0, 1.0),
+        111: (0.0, 0.0, 1.0, 1.0),  # infant-positioning table; drawings split cells
     },
     "a2acc3e9efa3d1ded7df5bcc357735bac04b4acc6c3f53674bc836c89b968f9d": {
         143: (0.0, 0.0, 1.0, 1.0),  # Annexure 6 blank reporting forms
