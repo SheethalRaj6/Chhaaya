@@ -130,6 +130,28 @@ def test_chunks_never_cross_a_section_and_stay_within_size(module: Path):
     assert all(c.tokens >= MIN_TOKENS for c in fever)
 
 
+def test_headings_sharing_a_block_with_body_text_still_separate_topics(tmp_path: Path):
+    pdf = tmp_path / "mixed-blocks.pdf"
+    with pymupdf.open() as doc:
+        page = doc.new_page()
+        for topic, y in (("Fever", 110), ("Diarrhoea", 370)):
+            page.insert_text((50, y), topic, fontsize=15)
+            page.insert_textbox(
+                pymupdf.Rect(50, y + 3, 545, y + 220),
+                " ".join(sentences(topic.lower(), 8)),
+                fontsize=10,
+            )
+        doc.save(pdf)
+
+    chunks = chunk_source(SOURCE, pdf, words)
+
+    assert {chunk.section for chunk in chunks} == {"Fever", "Diarrhoea"}
+    for chunk in chunks:
+        assert chunk.section.lower() in chunk.text.lower()
+        other = "diarrhoea" if chunk.section == "Fever" else "fever"
+        assert other not in chunk.text.lower()
+
+
 def test_every_chunk_keeps_its_source_and_the_page_it_starts_on(module: Path):
     chunks = chunk_source(SOURCE, module, words)
 
