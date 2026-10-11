@@ -328,10 +328,20 @@ def _units(
             if tokens <= MAX_TOKENS:
                 units.append((page, piece, tokens))
                 continue
-            words = piece.split()
-            step = max(1, len(words) * MAX_TOKENS // (tokens + 1))
-            for start in range(0, len(words), step):
-                run = " ".join(words[start : start + step])
+            run = ""
+            for word in piece.split():
+                grown = f"{run} {word}" if run else word
+                if count_tokens(grown) > MAX_TOKENS:
+                    if run:
+                        units.append((page, run, count_tokens(run)))
+                    if count_tokens(word) > MAX_TOKENS:
+                        raise ValueError(
+                            f"page {page}: a single word exceeds {MAX_TOKENS} tokens"
+                        )
+                    run = word
+                else:
+                    run = grown
+            if run:
                 units.append((page, run, count_tokens(run)))
     return units
 
@@ -354,7 +364,7 @@ def _pack(
         parts = [text]
         i += 1
         while i < len(units):
-            grown = size + units[i][2]
+            grown = count_tokens(" ".join([*parts, units[i][1]]))
             if grown > MAX_TOKENS or grown - target > target - size:
                 break
             parts.append(units[i][1])
