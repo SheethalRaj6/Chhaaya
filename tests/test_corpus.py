@@ -1,4 +1,5 @@
 import csv
+import json
 from pathlib import Path
 
 import httpx2
@@ -6,6 +7,7 @@ import pymupdf
 import pytest
 from tokenizers import Tokenizer, models, pre_tokenizers
 
+from chhaaya import corpus
 from chhaaya.corpus import (
     MAX_TOKENS,
     MIN_TOKENS,
@@ -297,6 +299,38 @@ def test_unmapped_glyphs_fail_instead_of_corrupting_clinical_text(tmp_path: Path
 
     with pytest.raises(ValueError, match="unmapped-glyph.pdf.*page 1"):
         chunk_source(SOURCE, pdf, words)
+
+
+def test_failed_build_preserves_previous_complete_corpus(tmp_path: Path, monkeypatch):
+    pdfs = tmp_path / "pdfs"
+    pdfs.mkdir()
+    make_pdf(
+        pdfs / "asha_module_x.pdf",
+        [[("h", "Clinical care"), *paragraphs("care", 8)]],
+    )
+    with pymupdf.open() as doc:
+        doc.new_page()
+        doc.save(pdfs / "scanned.pdf")
+    scanned = Source("scanned", "Scanned", "MoHFW", 2020, SOURCE.url, "test")
+    output = tmp_path / "chunks.jsonl"
+    previous = '{"id":"previous:1","text":"Previously verified corpus"}\n'
+    output.write_text(previous)
+    monkeypatch.setattr(corpus, "PDFS", pdfs)
+    monkeypatch.setattr(corpus, "CHUNKS", output)
+    monkeypatch.setattr(corpus, "read_sources", lambda: [SOURCE, scanned])
+    monkeypatch.setattr(corpus, "_bge_m3_counter", lambda: words)
+
+    with pytest.raises(SystemExit, match="scanned: no text extracted"):
+        corpus.main()
+
+    assert output.read_text() == previous
+    assert not output.with_suffix(".part").exists()
+
+    monkeypatch.setattr(corpus, "read_sources", lambda: [SOURCE])
+    corpus.main()
+    built = [json.loads(line) for line in output.read_text().splitlines()]
+    assert {chunk["source_id"] for chunk in built} == {SOURCE.id}
+    assert "Care note aa" in " ".join(chunk["text"] for chunk in built)
 
 
 def test_every_chunk_keeps_its_source_and_the_page_it_starts_on(module: Path):
