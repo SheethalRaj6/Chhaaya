@@ -43,7 +43,7 @@ REPEATED = 0.3
 # Bold body-size lines ("Remember:", "Key messages") stay inside their section.
 HEADING_SCALE = 1.15
 HEADING_MAX_WORDS = 15
-# Text this much smaller than body text is a figure or chart label: dropped.
+# Small figure labels are dropped; lines containing numbers stay as evidence.
 LABEL_SCALE = 0.65
 # A contents page sits in the first CONTENTS_SHARE of a document, and most of
 # its lines end in a page number.
@@ -521,7 +521,11 @@ def _sections(pages: list[list[list[_Line]]]) -> list[_Section]:
             )
         )
         for block in runs:
-            block = [line for line in block if line.size >= body * LABEL_SCALE]
+            block = [
+                line
+                for line in block
+                if line.size >= body * LABEL_SCALE or re.search(r"\d", line.text)
+            ]
             if not block:
                 continue
             if heading(block):
