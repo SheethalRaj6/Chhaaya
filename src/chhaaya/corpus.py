@@ -249,7 +249,7 @@ def _strip_furniture(pages: list[list[list[_Line]]]) -> list[list[list[_Line]]]:
             return False
         titled = any(text.lower() in _CONTENTS_TITLES for text in lines)
         listed = sum(bool(_LISTED.match(text)) for text in lines) / len(lines)
-        return listed >= 0.5 or (titled and listed >= 0.3)
+        return titled and listed >= 0.3
 
     return [
         []
