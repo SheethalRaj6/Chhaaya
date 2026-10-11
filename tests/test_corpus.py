@@ -226,21 +226,38 @@ def test_subword_chunks_preserve_uneven_text_within_token_limit(tmp_path: Path):
 
 
 @pytest.mark.parametrize("rotation", [0, 90])
-def test_clinical_tables_keep_merged_conditions_and_column_labels(tmp_path, rotation):
+@pytest.mark.parametrize("caption", [False, True])
+def test_clinical_tables_keep_merged_conditions_and_column_labels(
+    tmp_path, rotation, caption
+):
     pdf = tmp_path / "clinical-table.pdf"
     with pymupdf.open() as doc:
         page = doc.new_page()
         page.insert_text((50, 110), "Clinical thresholds", fontsize=15)
+        if caption:
+            page.draw_rect(pymupdf.Rect(50, 130, 550, 150))
+            page.insert_text(
+                (60, 145),
+                "Interpret the thresholds with the group and severity.",
+                fontsize=10,
+            )
         for x in (50, 250, 400, 550):
             page.draw_line((x, 150), (x, 300))
         for y in (150, 180, 260, 300):
             page.draw_line((50, y), (550, y))
         page.draw_line((250, 220), (550, 220))
         for x, y, text in (
-            (60, 170, "Group"), (260, 170, "Severity"), (410, 170, "Threshold"),
-            (60, 200, "Children"), (260, 200, "Moderate"), (410, 200, "7-9.9"),
-            (260, 240, "Severe"), (410, 240, "<7"),
-            (60, 280, "Adults"), (260, 280, "Severe"), (410, 280, "<8"),
+            (60, 170, "Group"),
+            (260, 170, "Severity"),
+            (410, 170, "Threshold"),
+            (60, 200, "Children"),
+            (260, 200, "Moderate"),
+            (410, 200, "7-9.9"),
+            (260, 240, "Severe"),
+            (410, 240, "<7"),
+            (60, 280, "Adults"),
+            (260, 280, "Severe"),
+            (410, 280, "<8"),
         ):
             page.insert_text((x, y), text, fontsize=10)
         doc.save(pdf)
@@ -296,6 +313,35 @@ def test_rotated_pages_keep_visits_in_reading_order(tmp_path: Path):
     )
     assert {chunk.section for chunk in chunks} == {"Home visits"}
     assert "Skills that Save Lives" not in text
+
+
+def test_long_table_cells_repeat_the_condition_on_every_continuation(tmp_path):
+    pdf = tmp_path / "long-table.pdf"
+    advice = " ".join(sentences("feeding", 30))
+    with pymupdf.open() as doc:
+        page = doc.new_page()
+        page.insert_text((50, 110), "Feeding advice", fontsize=15)
+        for x in (50, 200, 550):
+            page.draw_line((x, 150), (x, 750))
+        for y in (150, 180, 750):
+            page.draw_line((50, y), (550, y))
+        page.insert_text((60, 170), "Group", fontsize=10)
+        page.insert_text((210, 170), "Advice", fontsize=10)
+        page.insert_text((60, 200), "Children", fontsize=10)
+        assert (
+            page.insert_textbox(pymupdf.Rect(210, 190, 540, 740), advice, fontsize=8)
+            >= 0
+        )
+        doc.save(pdf)
+    chunks = chunk_source(SOURCE, pdf, words)
+    assert len(chunks) >= 2
+    for chunk in chunks:
+        assert "Group: Children" in chunk.text
+        assert "Advice:" in chunk.text
+        assert chunk.tokens <= MAX_TOKENS
+    text = " ".join(c.text for c in chunks)
+    assert "Feeding note aa tells" in text
+    assert "Feeding note bd tells" in text
 
 
 def test_symbol_font_bullets_do_not_become_letters_in_advice(tmp_path: Path):
@@ -378,6 +424,62 @@ def test_verified_font_repairs_apply_only_to_the_reviewed_pdf(tmp_path, monkeypa
         doc.save(changed)
     with pytest.raises(ValueError, match="different.pdf.*page 1"):
         chunk_source(SOURCE, changed, words)
+
+
+def test_reviewed_spacing_repairs_preserve_real_word_boundaries(tmp_path, monkeypatch):
+    pdf = make_pdf(tmp_path / "spaced-ligatures.pdf", [[
+        ("h", "Antenatal care"),
+        ("p", "Th is is the fi rst visit aft er registration. Check soft tissue with the mother."),
+    ]])
+    digest = hashlib.sha256(pdf.read_bytes()).hexdigest()
+    monkeypatch.setattr(corpus, "SPACING_REPAIRS", {digest}, raising=False)
+    text = " ".join(c.text for c in chunk_source(SOURCE, pdf, words))
+    assert "This is the first visit after registration." in text
+    assert "Check soft tissue with the mother." in text
+
+
+def test_reviewed_flowchart_region_does_not_linearize_branches(tmp_path, monkeypatch):
+    pdf = tmp_path / "prose-and-flowchart.pdf"
+    with pymupdf.open() as doc:
+        page = doc.new_page()
+        page.insert_text((50, 110), "Referral guidance", fontsize=15)
+        page.insert_textbox(pymupdf.Rect(50, 150, 300, 280),
+                            "If the child cannot drink, seek urgent care.", fontsize=10)
+        for box, text in [((320, 150, 550, 180), "Evaluate child"),
+                          ((320, 230, 420, 270), "YES: Admit"),
+                          ((450, 230, 550, 270), "NO: Discharge")]:
+            rect = pymupdf.Rect(box)
+            page.draw_rect(rect)
+            page.insert_text((rect.x0 + 5, rect.y0 + 15), text, fontsize=8)
+        page.draw_line((375, 180), (375, 230))
+        page.draw_line((375, 200), (500, 200))
+        page.draw_line((500, 200), (500, 230))
+        doc.save(pdf)
+    digest = hashlib.sha256(pdf.read_bytes()).hexdigest()
+    monkeypatch.setattr(corpus, "EXCLUDED_REGIONS", {digest: {1: (0.5, 0.15, 1.0, 0.52)}}, raising=False)
+    text = " ".join(c.text for c in chunk_source(SOURCE, pdf, words))
+    assert "If the child cannot drink, seek urgent care." in text
+    assert "Evaluate child" not in text
+    assert "Admit" not in text
+    assert "Discharge" not in text
+
+
+def test_repeated_clinical_table_rows_in_page_margins_are_not_furniture(tmp_path):
+    pdf = tmp_path / "margin-table.pdf"
+    with pymupdf.open() as doc:
+        for _ in range(3):
+            page = doc.new_page()
+            page.insert_text((50, 150), "Clinical thresholds", fontsize=15)
+            for x in (50, 250, 550):
+                page.draw_line((x, 720), (x, 810))
+            for y in (720, 750, 810):
+                page.draw_line((50, y), (550, y))
+            for x, y, text in [(60, 740, "Group"), (260, 740, "Threshold"),
+                               (60, 780, "Children"), (260, 780, "<7")]:
+                page.insert_text((x, y), text, fontsize=10)
+        doc.save(pdf)
+    text = " ".join(c.text for c in chunk_source(SOURCE, pdf, words))
+    assert text.count("Group: Children; Threshold: <7") == 3
 
 
 def test_failed_build_preserves_previous_complete_corpus(tmp_path: Path, monkeypatch):
