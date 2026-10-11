@@ -96,18 +96,27 @@ class DownloadError(RuntimeError):
 
 
 def read_sources(path: Path = SOURCES) -> list[Source]:
+    sources = []
     with path.open(newline="", encoding="utf-8") as f:
-        return [
-            Source(
-                id=row["id"],
-                title=row["title"],
-                publisher=row["publisher"],
-                year=int(row["year"]),
-                url=row["url"],
-                reason=row["reason"],
+        reader = csv.DictReader(f, strict=True)
+        for row in reader:
+            # An unquoted comma (say, inside a URL) shifts every later field.
+            if None in row or None in row.values():
+                raise ValueError(
+                    f"{path}: line {reader.line_num} has the wrong number of "
+                    "fields; quote any field that contains a comma"
+                )
+            sources.append(
+                Source(
+                    id=row["id"],
+                    title=row["title"],
+                    publisher=row["publisher"],
+                    year=int(row["year"]),
+                    url=row["url"],
+                    reason=row["reason"],
+                )
             )
-            for row in csv.DictReader(f, strict=True)
-        ]
+    return sources
 
 
 def download(sources: Iterable[Source], directory: Path, http: httpx2.Client) -> None:
