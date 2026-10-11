@@ -172,6 +172,29 @@ def test_early_numeric_table_survives_beside_a_contents_page(tmp_path: Path):
     assert "Chapter A" not in text
 
 
+def test_numeric_table_cells_survive_while_margin_page_numbers_go(tmp_path: Path):
+    pdf = tmp_path / "numeric-cells.pdf"
+    with pymupdf.open() as doc:
+        for number in range(1, 4):
+            page = doc.new_page()
+            page.insert_text((50, 30), HEADER, fontsize=8)
+            page.insert_text((290, 820), str(number), fontsize=8)
+            page.insert_text((50, 110), "Clinical thresholds", fontsize=15)
+            for y, label, value in (
+                (160, "Haemoglobin threshold in g/dL", "7.0"),
+                (260, "Blood pressure threshold in mmHg", "180 / 120"),
+            ):
+                page.insert_text((50, y), label, fontsize=10)
+                page.insert_text((300, y + 30), value, fontsize=10)
+        doc.save(pdf)
+
+    text = " ".join(chunk.text for chunk in chunk_source(SOURCE, pdf, words))
+
+    assert text.count("Haemoglobin threshold in g/dL 7.0") == 3
+    assert text.count("Blood pressure threshold in mmHg 180 / 120") == 3
+    assert not {"1", "2", "3"} & set(text.split())
+
+
 def test_every_chunk_keeps_its_source_and_the_page_it_starts_on(module: Path):
     chunks = chunk_source(SOURCE, module, words)
 
