@@ -221,6 +221,42 @@ def test_subword_chunks_preserve_uneven_text_within_token_limit(tmp_path: Path):
     assert all(chunk.tokens == count(chunk.text) <= 500 for chunk in chunks)
 
 
+def test_rotated_pages_keep_visits_in_reading_order(tmp_path: Path):
+    original = make_pdf(
+        tmp_path / "upright.pdf",
+        [
+            [
+                ("h", "Home visits"),
+                ("p", "First visit: registration."),
+                ("p", "Second visit: follow up."),
+                ("p", "Third visit: review."),
+            ]
+        ]
+        * 3,
+    )
+    rotated = tmp_path / "rotated.pdf"
+    with pymupdf.open(original) as source, pymupdf.open() as doc:
+        for number, original_page in enumerate(source):
+            page = doc.new_page(
+                width=original_page.rect.height, height=original_page.rect.width
+            )
+            page.show_pdf_page(page.rect, source, number, rotate=90)
+            page.set_rotation(90)
+        doc.save(rotated)
+
+    chunks = chunk_source(SOURCE, rotated, words)
+    text = " ".join(chunk.text for chunk in chunks)
+
+    assert (
+        text.count(
+            "First visit: registration. Second visit: follow up. Third visit: review."
+        )
+        == 3
+    )
+    assert {chunk.section for chunk in chunks} == {"Home visits"}
+    assert "Skills that Save Lives" not in text
+
+
 def test_every_chunk_keeps_its_source_and_the_page_it_starts_on(module: Path):
     chunks = chunk_source(SOURCE, module, words)
 
