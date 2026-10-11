@@ -259,6 +259,46 @@ def test_rotated_pages_keep_visits_in_reading_order(tmp_path: Path):
     assert "Skills that Save Lives" not in text
 
 
+def test_symbol_font_bullets_do_not_become_letters_in_advice(tmp_path: Path):
+    pdf = tmp_path / "symbol-bullet.pdf"
+    with pymupdf.open() as doc:
+        page = doc.new_page()
+        page.insert_text((50, 110), "Care advice", fontsize=15)
+        page.insert_text((50, 150), "z", fontname="cour", fontsize=10)
+        page.insert_text((60, 150), "Keep breastfeeding.", fontsize=10)
+        font = next(f[0] for f in doc.get_page_fonts(0) if f[4] == "cour")
+        doc.xref_set_key(font, "BaseFont", "/Wingdings-Regular")
+        doc.save(pdf)
+
+    chunks = chunk_source(SOURCE, pdf, words)
+
+    assert [chunk.text for chunk in chunks] == ["Keep breastfeeding."]
+
+
+def test_unmapped_glyphs_fail_instead_of_corrupting_clinical_text(tmp_path: Path):
+    pdf = tmp_path / "unmapped-glyph.pdf"
+    font = pymupdf.Font("helv")
+    with pymupdf.open() as doc:
+        page = doc.new_page()
+        page.insert_font(fontname="clinical", fontbuffer=font.buffer)
+        page.insert_text(
+            (50, 140), "After care matters.", fontname="clinical", fontsize=10
+        )
+        font_xref = doc.get_page_fonts(0)[0][0]
+        cmap_xref = int(doc.xref_get_key(font_xref, "ToUnicode")[1].split()[0])
+        cmap = doc.xref_stream(cmap_xref)
+        # The drawn glyph remains 'f', but the broken Unicode map loses it.
+        override = (
+            f"1 beginbfchar\n<{font.has_glyph(ord('f')):04x}> <0004>\n"
+            "endbfchar\nendcmap"
+        ).encode()
+        doc.update_stream(cmap_xref, cmap.replace(b"endcmap", override))
+        doc.save(pdf)
+
+    with pytest.raises(ValueError, match="unmapped-glyph.pdf.*page 1"):
+        chunk_source(SOURCE, pdf, words)
+
+
 def test_every_chunk_keeps_its_source_and_the_page_it_starts_on(module: Path):
     chunks = chunk_source(SOURCE, module, words)
 
