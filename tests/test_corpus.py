@@ -222,18 +222,20 @@ def test_subword_chunks_preserve_uneven_text_within_token_limit(tmp_path: Path):
 
 
 def test_rotated_pages_keep_visits_in_reading_order(tmp_path: Path):
-    original = make_pdf(
-        tmp_path / "upright.pdf",
-        [
-            [
-                ("h", "Home visits"),
-                ("p", "First visit: registration."),
-                ("p", "Second visit: follow up."),
-                ("p", "Third visit: review."),
-            ]
-        ]
-        * 3,
-    )
+    original = tmp_path / "upright.pdf"
+    with pymupdf.open() as doc:
+        for number in range(1, 4):
+            page = doc.new_page()
+            page.insert_text((50, 30), HEADER, fontsize=8)
+            page.insert_text((290, 820), str(number), fontsize=8)
+            page.insert_text((50, 140), "Home visits", fontsize=15)
+            for y, text in (
+                (180, "First visit: registration."),
+                (230, "Second visit: follow up."),
+                (280, "Third visit: review."),
+            ):
+                page.insert_text((50, y), text, fontsize=10)
+        doc.save(original)
     rotated = tmp_path / "rotated.pdf"
     with pymupdf.open(original) as source, pymupdf.open() as doc:
         for number, original_page in enumerate(source):
