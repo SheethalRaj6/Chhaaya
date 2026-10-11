@@ -173,3 +173,15 @@ def test_every_source_is_listed_with_what_a_citation_needs():
         assert source.title and source.publisher and source.reason
         assert 1990 <= source.year <= 2030
         assert source.url.startswith("https://")
+
+
+def test_a_row_with_an_unquoted_comma_is_rejected_not_truncated(tmp_path: Path):
+    path = tmp_path / "sources.csv"
+    path.write_text(
+        "id,title,publisher,year,url,reason\n"
+        "sba,SBA,MoHFW,2010,https://example.org/ANMs,LHVs,SNs.pdf,antenatal care\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="line 2"):
+        read_sources(path)
