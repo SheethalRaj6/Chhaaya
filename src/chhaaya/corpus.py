@@ -194,13 +194,16 @@ def _read_lines(pdf: Path) -> list[list[list[_Line]]]:
         for page in doc:
             height = page.rect.height
             blocks = []
-            for block in page.get_text("dict", sort=True)["blocks"]:
+            for block in page.get_text("dict")["blocks"]:
                 lines = []
+                positions = []
                 for line in block.get("lines", []):
                     spans = [s for s in line["spans"] if clean_text(s["text"])]
                     if not spans:
                         continue
                     main = max(spans, key=lambda s: len(s["text"]))
+                    # PDF text coordinates precede the page's display rotation.
+                    rect = pymupdf.Rect(line["bbox"]) * page.rotation_matrix
                     lines.append(
                         _Line(
                             text=clean_text("".join(s["text"] for s in spans)),
@@ -209,13 +212,14 @@ def _read_lines(pdf: Path) -> list[list[list[_Line]]]:
                                 s["flags"] & 16 or "bold" in s["font"].lower()
                                 for s in spans
                             ),
-                            top=line["bbox"][1] / height,
-                            bottom=line["bbox"][3] / height,
+                            top=rect.y0 / height,
+                            bottom=rect.y1 / height,
                         )
                     )
+                    positions.append((rect.y0, rect.x0))
                 if lines:
-                    blocks.append(lines)
-            pages.append(blocks)
+                    blocks.append((min(positions), lines))
+            pages.append([lines for _, lines in sorted(blocks, key=lambda b: b[0])])
     return pages
 
 
