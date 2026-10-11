@@ -225,6 +225,41 @@ def test_subword_chunks_preserve_uneven_text_within_token_limit(tmp_path: Path):
     assert all(chunk.tokens == count(chunk.text) <= 500 for chunk in chunks)
 
 
+@pytest.mark.parametrize("rotation", [0, 90])
+def test_clinical_tables_keep_merged_conditions_and_column_labels(tmp_path, rotation):
+    pdf = tmp_path / "clinical-table.pdf"
+    with pymupdf.open() as doc:
+        page = doc.new_page()
+        page.insert_text((50, 110), "Clinical thresholds", fontsize=15)
+        for x in (50, 250, 400, 550):
+            page.draw_line((x, 150), (x, 300))
+        for y in (150, 180, 260, 300):
+            page.draw_line((50, y), (550, y))
+        page.draw_line((250, 220), (550, 220))
+        for x, y, text in (
+            (60, 170, "Group"), (260, 170, "Severity"), (410, 170, "Threshold"),
+            (60, 200, "Children"), (260, 200, "Moderate"), (410, 200, "7-9.9"),
+            (260, 240, "Severe"), (410, 240, "<7"),
+            (60, 280, "Adults"), (260, 280, "Severe"), (410, 280, "<8"),
+        ):
+            page.insert_text((x, y), text, fontsize=10)
+        doc.save(pdf)
+    if rotation:
+        rotated = tmp_path / "sideways-table.pdf"
+        with pymupdf.open(pdf) as source, pymupdf.open() as doc:
+            page = doc.new_page(width=842, height=595)
+            page.show_pdf_page(page.rect, source, 0, rotate=rotation)
+            doc.save(rotated)
+        pdf = rotated
+
+    chunks = chunk_source(SOURCE, pdf, words)
+    text = " ".join(c.text for c in chunks)
+    assert "Group: Children; Severity: Moderate; Threshold: 7-9.9" in text
+    assert "Group: Children; Severity: Severe; Threshold: <7" in text
+    assert "Group: Adults; Severity: Severe; Threshold: <8" in text
+    assert {c.section for c in chunks} == {"Clinical thresholds"}
+
+
 def test_rotated_pages_keep_visits_in_reading_order(tmp_path: Path):
     original = tmp_path / "upright.pdf"
     with pymupdf.open() as doc:
