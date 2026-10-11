@@ -63,7 +63,6 @@ _LIGATURE_GAP = re.compile(r"([\ufb00-\ufb04]) (?=[a-z])")
 # Private-use code points (symbol-font bullets) and control characters.
 _JUNK = re.compile(r"[\x00-\x08\x0b-\x1f\ue000-\uf8ff]")
 _CONTENTS_TITLES = {"contents", "table of contents", "content", "index"}
-_WORD = re.compile(r"[^\W\d_]{2,}")
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 TokenCounter = Callable[[str], int]
@@ -287,7 +286,7 @@ def _sections(pages: list[list[list[_Line]]]) -> list[_Section]:
         )
         for block in runs:
             block = [line for line in block if line.size >= body * LABEL_SCALE]
-            if not block or not _WORD.search(" ".join(line.text for line in block)):
+            if not block:
                 continue
             if heading(block):
                 text = " ".join(line.text for line in block)
