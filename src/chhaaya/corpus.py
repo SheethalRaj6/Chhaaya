@@ -62,6 +62,7 @@ _LIGATURES = str.maketrans(
 _LIGATURE_GAP = re.compile(r"([\ufb00-\ufb04]) (?=[a-z])")
 # Private-use code points (symbol-font bullets) and control characters.
 _JUNK = re.compile(r"[\x00-\x08\x0b-\x1f\ue000-\uf8ff]")
+_UNMAPPED = re.compile(r"[\x00-\x06\x0b-\x1f\ufffd]")
 _CONTENTS_TITLES = {"contents", "table of contents", "content", "index"}
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
@@ -194,13 +195,26 @@ def _read_lines(pdf: Path) -> list[list[list[_Line]]]:
         for page in doc:
             height = page.rect.height
             blocks = []
-            for block in page.get_text("dict")["blocks"]:
+            # Unknown glyphs must remain visible as errors, not guessed CIDs.
+            flags = pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_USE_CID_FOR_UNKNOWN_UNICODE
+            for block in page.get_text("dict", flags=flags)["blocks"]:
                 lines = []
                 positions = []
                 for line in block.get("lines", []):
-                    spans = [s for s in line["spans"] if clean_text(s["text"])]
+                    spans = [
+                        s
+                        for s in line["spans"]
+                        if not s["font"].lower().startswith("wingdings")
+                        and s["text"].strip()
+                    ]
                     if not spans:
                         continue
+                    for span in spans:
+                        if _UNMAPPED.search(span["text"]):
+                            raise ValueError(
+                                f"{pdf}: page {page.number + 1}: unmapped glyph "
+                                f"in font {span['font']}: {span['text']!r}"
+                            )
                     main = max(spans, key=lambda s: len(s["text"]))
                     # PDF text coordinates precede the page's display rotation.
                     rect = pymupdf.Rect(line["bbox"]) * page.rotation_matrix
