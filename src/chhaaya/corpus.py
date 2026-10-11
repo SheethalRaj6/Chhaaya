@@ -82,7 +82,10 @@ GLYPH_REPAIRS = {
         "CambriaMath/951": "≥",
     },
 }
-_REPAIRED_GAP = re.compile(r"\b([A-Za-z]*(?:tt|ft|ti)) ([a-z]+)\b")
+SPACING_REPAIRS = {
+    "8e136a6492ef5b0ffd9df2a835c43579f4b039c1d734cf38dfd6aaa7b085ae27",
+}
+_REPAIRED_GAP = re.compile(r"\b([A-Za-z]*(?:tt|ft|ti|Th|fi|fl|ff)) ([a-z]+)\b")
 _REPAIRED_WORDS = {
     "after",
     "afterwards",
@@ -110,6 +113,141 @@ _REPAIRED_WORDS = {
     "observation",
     "activities",
     "participate",
+    "the",
+    "this",
+    "these",
+    "there",
+    "therefore",
+    "they",
+    "third",
+    "those",
+    "though",
+    "three",
+    "then",
+    "threatened",
+    "thermometer",
+    "therapeutic",
+    "thus",
+    "thumbs",
+    "thread",
+    "thinned",
+    "first",
+    "five",
+    "fingers",
+    "finger",
+    "find",
+    "finding",
+    "findings",
+    "fixed",
+    "fitting",
+    "fittings",
+    "fit",
+    "finish",
+    "fine",
+    "financial",
+    "final",
+    "finally",
+    "figure",
+    "figures",
+    "field",
+    "firm",
+    "flat",
+    "flex",
+    "flexed",
+    "flexion",
+    "flexures",
+    "flushing",
+    "fluids",
+    "fluid",
+    "flow",
+    "flowchart",
+    "floating",
+    "flabby",
+    "flashlight",
+    "effective",
+    "effects",
+    "identified",
+    "effacement",
+    "different",
+    "offered",
+    "beneficiary",
+    "effect",
+    "offer",
+    "effectively",
+    "identification",
+    "efforts",
+    "defined",
+    "suffering",
+    "superficial",
+    "proficient",
+    "confirm",
+    "significant",
+    "filled",
+    "certificates",
+    "benefits",
+    "reflexes",
+    "effaced",
+    "inflating",
+    "affect",
+    "coffee",
+    "filling",
+    "fill",
+    "confidence",
+    "fibre",
+    "beneficial",
+    "softer",
+    "certification",
+    "certificate",
+    "benefitted",
+    "drafted",
+    "firming",
+    "scientific",
+    "defines",
+    "immunodeficiency",
+    "fulfilling",
+    "thereafter",
+    "reflected",
+    "deficiency",
+    "confinement",
+    "filariasis",
+    "fingertips",
+    "difference",
+    "confirmation",
+    "suffers",
+    "lifting",
+    "qualified",
+    "affects",
+    "suffer",
+    "specifically",
+    "offering",
+    "reflux",
+    "forefinger",
+    "orifice",
+    "differentiated",
+    "confined",
+    "simplified",
+    "artificial",
+    "identifiable",
+    "inflate",
+    "benefit",
+    "satisfied",
+    "fist",
+    "fissured",
+    "affecting",
+    "influence",
+    "confident",
+    "reflect",
+    "fingernails",
+    "effort",
+    "landfill",
+    "overfill",
+    "benefited",
+    "certifications",
+    "effectiveness",
+    "beneficiaries",
+    "fibroids",
+    "modified",
+    "refilled",
 }
 
 # Complete prose boxes checked against the posters. Algorithms, dosage tables,
@@ -339,6 +477,7 @@ def _read_lines(
     with pymupdf.open(pdf) as doc:
         digest = hashlib.sha256(pdf.read_bytes()).hexdigest()
         repairs = GLYPH_REPAIRS.get(digest, {})
+        repair_gaps = bool(repairs) or digest in SPACING_REPAIRS
         excluded = EXCLUDED_REGIONS.get(digest, {})
         _repair_fonts(doc, repairs)
         for page in doc:
@@ -450,7 +589,7 @@ def _read_lines(
                         rect |= pymupdf.Rect(span["bbox"])
                     rect *= page.rotation_matrix
                     text = "".join(s["text"] for s in spans)
-                    text = _clean_line(text, repairs)
+                    text = _clean_line(text, repair_gaps)
                     if not text or (clips is not None and text == "•"):
                         continue
                     lines.append(
@@ -469,13 +608,15 @@ def _read_lines(
                 if lines:
                     blocks.append((min(positions), lines))
             for table in tables:
-                blocks.extend(_table_blocks(page, table, repairs, count_tokens, number))
+                blocks.extend(
+                    _table_blocks(page, table, repair_gaps, count_tokens, number)
+                )
             pages.append([lines for _, lines in sorted(blocks, key=lambda b: b[0])])
     return pages
 
 
-def _clean_line(text: str, repairs: dict[str, str]) -> str:
-    if repairs:
+def _clean_line(text: str, repair_gaps: bool) -> str:
+    if repair_gaps:
         text = _REPAIRED_GAP.sub(
             lambda m: m[1] + m[2] if (m[1] + m[2]).lower() in _REPAIRED_WORDS else m[0],
             text,
@@ -486,7 +627,7 @@ def _clean_line(text: str, repairs: dict[str, str]) -> str:
 def _table_blocks(
     page: pymupdf.Page,
     table: pymupdf.table.Table,
-    repairs: dict[str, str],
+    repair_gaps: bool,
     count_tokens: TokenCounter,
     number: int,
 ) -> list[tuple[tuple[float, float], list[_Line]]]:
@@ -506,7 +647,9 @@ def _table_blocks(
                     for s in line["spans"]
                     if not s["font"].lower().startswith("wingdings")
                 ]
-                lines.append(_clean_line("".join(s["text"] for s in spans), repairs))
+                lines.append(
+                    _clean_line("".join(s["text"] for s in spans), repair_gaps)
+                )
                 for span in spans:
                     sizes[round(span["size"], 1)] += len(span["text"])
         texts[(box.x0, box.y0, box.x1, box.y1)] = " ".join(lines).strip()
@@ -545,7 +688,7 @@ def _table_blocks(
     if table.header.external:
         depth = 0
         headers = [
-            _clean_line(name or f"Column {col + 1}", repairs)
+            _clean_line(name or f"Column {col + 1}", repair_gaps)
             for col, name in enumerate(table.header.names)
         ]
         if len(headers) != len(xs) - 1:
