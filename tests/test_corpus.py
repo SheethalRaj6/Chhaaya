@@ -458,6 +458,39 @@ def test_download_rejects_a_wrong_cached_edition_and_wrong_remote_bytes(tmp_path
     assert cached.read_bytes() == verified
 
 
+def test_curated_poster_excerpts_keep_context_and_exclude_flowcharts(
+    tmp_path, monkeypatch
+):
+    pdf = tmp_path / "poster.pdf"
+    with pymupdf.open() as doc:
+        page = doc.new_page(width=600, height=800)
+        page.insert_text((50, 120), "When to refer", fontsize=15)
+        page.insert_text((50, 150), "If the child cannot drink, refer to hospital.")
+        page.insert_text((50, 450), "YES: Give first line treatment.")
+        page.insert_text((350, 550), "NO: Further investigation.")
+        page.draw_line((50, 470), (350, 530))
+        doc.save(pdf)
+    digest = hashlib.sha256(pdf.read_bytes()).hexdigest()
+    monkeypatch.setattr(
+        corpus,
+        "CURATED_EXCERPTS",
+        {SOURCE.id: (digest, [(1, "When to refer", (0.05, 0.12, 0.95, 0.22))])},
+        raising=False,
+    )
+
+    chunks = chunk_source(SOURCE, pdf, words)
+    assert [(c.page, c.section, c.text) for c in chunks] == [
+        (1, "When to refer", "When to refer If the child cannot drink, refer to hospital.")
+    ]
+
+    changed = tmp_path / "changed-poster.pdf"
+    with pymupdf.open(pdf) as doc:
+        doc.set_metadata({"title": "New layout"})
+        doc.save(changed)
+    with pytest.raises(ValueError, match="unreviewed poster"):
+        chunk_source(SOURCE, changed, words)
+
+
 def test_every_source_is_listed_with_what_a_citation_needs():
     with SOURCES.open(newline="", encoding="utf-8") as f:
         header = next(csv.reader(f))
