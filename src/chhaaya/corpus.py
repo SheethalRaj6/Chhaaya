@@ -408,19 +408,24 @@ def main() -> None:
 
     count_tokens = _bge_m3_counter()
     total = 0
-    with CHUNKS.open("w", encoding="utf-8") as out:
-        for source in sources:
-            chunks = chunk_source(source, PDFS / f"{source.id}.pdf", count_tokens)
-            if not chunks:
-                raise SystemExit(f"{source.id}: no text extracted (scanned PDF?)")
-            for chunk in chunks:
-                out.write(json.dumps(asdict(chunk), ensure_ascii=False) + "\n")
-            sizes = [c.tokens for c in chunks]
-            print(
-                f"{source.id:28} {len(chunks):4} chunks, tokens min {min(sizes)} "
-                f"median {statistics.median(sizes):.0f} max {max(sizes)}"
-            )
-            total += len(chunks)
+    partial = CHUNKS.with_suffix(".part")
+    try:
+        with partial.open("w", encoding="utf-8") as out:
+            for source in sources:
+                chunks = chunk_source(source, PDFS / f"{source.id}.pdf", count_tokens)
+                if not chunks:
+                    raise SystemExit(f"{source.id}: no text extracted (scanned PDF?)")
+                for chunk in chunks:
+                    out.write(json.dumps(asdict(chunk), ensure_ascii=False) + "\n")
+                sizes = [c.tokens for c in chunks]
+                print(
+                    f"{source.id:28} {len(chunks):4} chunks, tokens min {min(sizes)} "
+                    f"median {statistics.median(sizes):.0f} max {max(sizes)}"
+                )
+                total += len(chunks)
+        partial.replace(CHUNKS)
+    finally:
+        partial.unlink(missing_ok=True)
     print(f"{total} chunks from {len(sources)} sources -> {CHUNKS}", file=sys.stderr)
 
 
