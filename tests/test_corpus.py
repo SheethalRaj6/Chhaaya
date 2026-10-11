@@ -152,6 +152,26 @@ def test_headings_sharing_a_block_with_body_text_still_separate_topics(tmp_path:
         assert other not in chunk.text.lower()
 
 
+def test_early_numeric_table_survives_beside_a_contents_page(tmp_path: Path):
+    rows = [f"Threshold for group {chr(65 + i)} {120 + i * 10}" for i in range(6)]
+    pdf = make_pdf(
+        tmp_path / "contents-and-table.pdf",
+        [
+            [
+                ("h", "Contents"),
+                *[("p", f"Chapter {chr(65 + i)} {i + 3}") for i in range(6)],
+            ],
+            [("h", "Blood pressure thresholds"), *[("p", row) for row in rows]],
+        ],
+    )
+
+    text = " ".join(chunk.text for chunk in chunk_source(SOURCE, pdf, words))
+
+    for row in rows:
+        assert row in text
+    assert "Chapter A" not in text
+
+
 def test_every_chunk_keeps_its_source_and_the_page_it_starts_on(module: Path):
     chunks = chunk_source(SOURCE, module, words)
 
