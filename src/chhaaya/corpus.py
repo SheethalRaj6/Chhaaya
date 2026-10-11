@@ -19,7 +19,7 @@ import sys
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
-from itertools import groupby
+from itertools import groupby, pairwise
 from pathlib import Path
 
 import httpx2
@@ -166,6 +166,21 @@ CURATED_EXCERPTS = {
     ),
 }
 
+# These reviewed figures need curves/arrows, and the quiz includes wrong answers.
+# Neither is patient guidance. Surrounding narrative and original PDFs remain.
+EXCLUDED_REGIONS = {
+    "8e136a6492ef5b0ffd9df2a835c43579f4b039c1d734cf38dfd6aaa7b085ae27": {
+        68: (0.0, 0.0, 1.0, 1.0),  # newborn-resuscitation flowchart
+        89: (0.0, 0.0, 1.0, 1.0),  # postpartum-haemorrhage flowchart
+    },
+    "95fa96e625b4b71e358af904288a6a854b29f12dae93e548ac963901aa10a298": {
+        35: (0.0, 0.0, 1.0, 0.755),  # TB cascade diagrams; bottom prose retained
+    },
+    "e65aa796e20d40652dd86cdda573b64a979048dd8970f11b7f628cd2f1b34957": {
+        5: (0.0, 0.0, 1.0, 1.0),  # unanswered multiple-choice assessment
+    },
+}
+
 
 @dataclass(frozen=True)
 class Source:
@@ -199,6 +214,7 @@ class _Line:
     bold: bool
     top: float  # share of page height
     bottom: float
+    table: bool = False
 
 
 @dataclass
@@ -280,14 +296,14 @@ def chunk_source(source: Source, pdf: Path, count_tokens: TokenCounter) -> list[
             raise ValueError(f"{source.id}: unreviewed poster edition or layout")
         sections = []
         for page, heading, bounds in excerpts:
-            blocks = _read_lines(pdf, clips={page: bounds})[page - 1]
+            blocks = _read_lines(pdf, count_tokens, clips={page: bounds})[page - 1]
             if not blocks:
                 raise ValueError(f"{source.id}: page {page}: empty excerpt {heading}")
             sections.append(
                 _Section(heading, page, [(page, _join(block)) for block in blocks])
             )
     else:
-        sections = _sections(_strip_furniture(_read_lines(pdf)))
+        sections = _sections(_strip_furniture(_read_lines(pdf, count_tokens)))
     for section in sections:
         for page, text in _pack(section.paragraphs, count_tokens):
             chunks.append(
@@ -314,20 +330,46 @@ def clean_text(text: str) -> str:
 
 def _read_lines(
     pdf: Path,
+    count_tokens: TokenCounter,
     *,
     clips: dict[int, tuple[float, float, float, float]] | None = None,
 ) -> list[list[list[_Line]]]:
     """Pages, each a list of text blocks, each a list of lines."""
     pages = []
     with pymupdf.open(pdf) as doc:
-        repairs = GLYPH_REPAIRS.get(hashlib.sha256(pdf.read_bytes()).hexdigest(), {})
+        digest = hashlib.sha256(pdf.read_bytes()).hexdigest()
+        repairs = GLYPH_REPAIRS.get(digest, {})
+        excluded = EXCLUDED_REGIONS.get(digest, {})
         _repair_fonts(doc, repairs)
         for page in doc:
             number = len(pages) + 1
+            if excluded.get(number) == (0.0, 0.0, 1.0, 1.0):
+                pages.append([])
+                continue
             if clips is not None and number not in clips:
                 pages.append([])
                 continue
+            if clips is None:
+                page.remove_rotation()
+                directions = Counter()
+                for block in page.get_text("dict")["blocks"]:
+                    for line in block.get("lines", []):
+                        directions[tuple(line["dir"])] += sum(
+                            len(s["text"]) for s in line["spans"]
+                        )
+                if directions:
+                    dx, dy = directions.most_common(1)[0][0]
+                    if abs(dy) > abs(dx):
+                        page.set_rotation(90 if dy < 0 else 270)
+                        page.remove_rotation()
             height = page.rect.height
+            exclusion = None
+            if number in excluded:
+                x0, y0, x1, y1 = excluded[number]
+                width = page.rect.width
+                exclusion = pymupdf.Rect(
+                    x0 * width, y0 * height, x1 * width, y1 * height
+                )
             clip = None
             if clips is not None:
                 x0, y0, x1, y1 = clips[number]
@@ -336,6 +378,25 @@ def _read_lines(
             blocks = []
             # Unknown glyphs must remain visible as errors, not guessed CIDs.
             flags = pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_USE_CID_FOR_UNKNOWN_UNICODE
+            tables = (
+                [
+                    t
+                    for t in page.find_tables(strategy="lines_strict").tables
+                    if t.col_count > 1
+                    and t.row_count > 1
+                    and not (
+                        exclusion is not None
+                        and exclusion.intersects(pymupdf.Rect(t.bbox))
+                    )
+                    # Decorative text boxes can acquire columns from arrows.
+                    and any(
+                        sum(bool(v and v.strip()) for v in row) > 1
+                        for row in t.extract()
+                    )
+                ]
+                if clips is None
+                else []
+            )
             for block in page.get_text("dict", flags=flags)["blocks"]:
                 lines = []
                 positions = []
@@ -346,6 +407,10 @@ def _read_lines(
                         if not s["font"].lower().startswith("wingdings")
                         and s["text"].strip()
                         and (clip is None or clip.contains(pymupdf.Rect(s["bbox"])))
+                        and not (
+                            exclusion is not None
+                            and exclusion.intersects(pymupdf.Rect(s["bbox"]))
+                        )
                         # The reviewed ICMR posters overlay a large diagonal
                         # Arial watermark, whose clipped letters are not prose.
                         and not (
@@ -362,6 +427,22 @@ def _read_lines(
                                 f"{pdf}: page {page.number + 1}: unmapped glyph "
                                 f"in font {span['font']}: {span['text']!r}"
                             )
+                    spans = [
+                        s
+                        for s in spans
+                        if not any(
+                            pymupdf.Rect(t.bbox).contains(
+                                (
+                                    pymupdf.Rect(s["bbox"]).tl
+                                    + pymupdf.Rect(s["bbox"]).br
+                                )
+                                / 2
+                            )
+                            for t in tables
+                        )
+                    ]
+                    if not spans:
+                        continue
                     main = max(spans, key=lambda s: len(s["text"]))
                     # PDF text coordinates precede the page's display rotation.
                     rect = pymupdf.Rect(spans[0]["bbox"])
@@ -369,16 +450,7 @@ def _read_lines(
                         rect |= pymupdf.Rect(span["bbox"])
                     rect *= page.rotation_matrix
                     text = "".join(s["text"] for s in spans)
-                    if repairs:
-                        text = _REPAIRED_GAP.sub(
-                            lambda m: (
-                                m[1] + m[2]
-                                if (m[1] + m[2]).lower() in _REPAIRED_WORDS
-                                else m[0]
-                            ),
-                            text,
-                        )
-                    text = clean_text(text)
+                    text = _clean_line(text, repairs)
                     if not text or (clips is not None and text == "•"):
                         continue
                     lines.append(
@@ -396,8 +468,150 @@ def _read_lines(
                     positions.append((rect.y0, rect.x0))
                 if lines:
                     blocks.append((min(positions), lines))
+            for table in tables:
+                blocks.extend(_table_blocks(page, table, repairs, count_tokens, number))
             pages.append([lines for _, lines in sorted(blocks, key=lambda b: b[0])])
     return pages
+
+
+def _clean_line(text: str, repairs: dict[str, str]) -> str:
+    if repairs:
+        text = _REPAIRED_GAP.sub(
+            lambda m: m[1] + m[2] if (m[1] + m[2]).lower() in _REPAIRED_WORDS else m[0],
+            text,
+        )
+    return clean_text(text)
+
+
+def _table_blocks(
+    page: pymupdf.Page,
+    table: pymupdf.table.Table,
+    repairs: dict[str, str],
+    count_tokens: TokenCounter,
+    number: int,
+) -> list[tuple[tuple[float, float], list[_Line]]]:
+    """Repeat labels and actual merged cells, never infer values from empty cells."""
+    boxes = [pymupdf.Rect(cell) for cell in table.cells if cell is not None]
+    xs = sorted({x for box in boxes for x in (box.x0, box.x1)})
+    ys = sorted({y for box in boxes for y in (box.y0, box.y1)})
+    texts = {}
+    sizes = Counter()
+    flags = pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_USE_CID_FOR_UNKNOWN_UNICODE
+    for box in boxes:
+        lines = []
+        for block in page.get_text("dict", clip=box, flags=flags)["blocks"]:
+            for line in block.get("lines", []):
+                spans = [
+                    s
+                    for s in line["spans"]
+                    if not s["font"].lower().startswith("wingdings")
+                ]
+                lines.append(_clean_line("".join(s["text"] for s in spans), repairs))
+                for span in spans:
+                    sizes[round(span["size"], 1)] += len(span["text"])
+        texts[(box.x0, box.y0, box.x1, box.y1)] = " ".join(lines).strip()
+
+    grid = []
+    for y0, y1 in pairwise(ys):
+        row = []
+        for x0, x1 in pairwise(xs):
+            center = pymupdf.Point((x0 + x1) / 2, (y0 + y1) / 2)
+            matches = [
+                texts[(box.x0, box.y0, box.x1, box.y1)]
+                for box in boxes
+                if box.contains(center)
+            ]
+            if len(matches) > 1:
+                raise ValueError(f"page {number}: overlapping table cells")
+            row.append(matches[0] if matches else "")
+        grid.append(row)
+    # A full-width title belongs to the table, not independently to every column.
+    start = 0
+    captions = []
+    while start < len(grid) and len(set(grid[start])) == 1:
+        if grid[start][0]:
+            captions.append(grid[start][0])
+        start += 1
+    if start == len(grid):
+        raise ValueError(f"page {number}: table has no distinct columns")
+    # A multi-row header has cells that span the header's physical rows.
+    header_end = max(box.y1 for box in boxes if box.y0 <= ys[start] < box.y1)
+    depth = ys.index(header_end)
+    headers = [
+        " / ".join(dict.fromkeys(row[col] for row in grid[start:depth] if row[col]))
+        or f"Column {col + 1}"
+        for col in range(len(xs) - 1)
+    ]
+    if table.header.external:
+        depth = 0
+        headers = [
+            _clean_line(name or f"Column {col + 1}", repairs)
+            for col, name in enumerate(table.header.names)
+        ]
+        if len(headers) != len(xs) - 1:
+            raise ValueError(f"page {number}: table header does not match its columns")
+    rows = grid[depth:]
+    if not rows:
+        # A form may consist entirely of merged cells rather than a header.
+        rows = grid
+        headers = [f"Column {col + 1}" for col in range(len(xs) - 1)]
+        depth = 0
+    blocks = []
+    if not sizes:
+        return []
+    size = sizes.most_common(1)[0][0]
+    for index, row in enumerate(rows, depth):
+        fields = [
+            f"{header}: {value}"
+            for header, value in zip(headers, row, strict=True)
+            if value
+        ]
+        if not fields:
+            continue
+        prefix = "Table row: " + (" / ".join(captions) + "; " if captions else "")
+        text = prefix + "; ".join(fields)
+        pieces = [text]
+        if count_tokens(text) > MAX_TOKENS:
+            # Split only the largest cell and repeat every other cell in full.
+            # Its conditions, units and peer values remain on each continuation.
+            col = max(
+                (c for c, value in enumerate(row) if value),
+                key=lambda c: count_tokens(f"{headers[c]}: {row[c]}"),
+            )
+            context = prefix + "; ".join(
+                f"{headers[c]}: {value}"
+                for c, value in enumerate(row)
+                if value and c != col
+            )
+            context += f"; {headers[col]}: "
+            pieces = []
+            run = ""
+            for word in row[col].split():
+                grown = f"{run} {word}" if run else word
+                if count_tokens(context + grown) > MAX_TOKENS:
+                    if run:
+                        pieces.append(context + run)
+                    if count_tokens(context + word) > MAX_TOKENS:
+                        raise ValueError(
+                            f"page {number}: table context exceeds token limit"
+                        )
+                    run = word
+                else:
+                    run = grown
+            if run:
+                pieces.append(context + run)
+        for piece in pieces:
+            top = ys[index]
+            line = _Line(
+                piece,
+                size,
+                False,
+                top / page.rect.height,
+                ys[index + 1] / page.rect.height,
+                table=True,
+            )
+            blocks.append(((top, xs[0]), [line]))
+    return blocks
 
 
 def _repair_fonts(doc: pymupdf.Document, repairs: dict[str, str]) -> None:
@@ -456,6 +670,8 @@ def _repair_fonts(doc: pymupdf.Document, repairs: dict[str, str]) -> None:
 
 
 def _margin_key(line: _Line) -> str | None:
+    if line.table:
+        return None
     if line.top > MARGIN and line.bottom < 1 - MARGIN:
         return None
     return re.sub(r"[0-9]+", "#", line.text.lower())
@@ -505,6 +721,8 @@ def _sections(pages: list[list[list[_Line]]]) -> list[_Section]:
     body = sizes.most_common(1)[0][0]
 
     def heading(block: list[_Line]) -> bool:
+        if any(line.table for line in block):
+            return False
         text = " ".join(line.text for line in block)
         if len(text.split()) > HEADING_MAX_WORDS or not re.search(r"[^\W\d_]", text):
             return False
@@ -517,14 +735,17 @@ def _sections(pages: list[list[list[_Line]]]) -> list[_Section]:
             list(lines)
             for block in blocks
             for _, lines in groupby(
-                block, key=lambda line: line.size >= body * HEADING_SCALE
+                block,
+                key=lambda line: not line.table and line.size >= body * HEADING_SCALE,
             )
         )
         for block in runs:
             block = [
                 line
                 for line in block
-                if line.size >= body * LABEL_SCALE or re.search(r"\d", line.text)
+                if line.table
+                or line.size >= body * LABEL_SCALE
+                or re.search(r"\d", line.text)
             ]
             if not block:
                 continue

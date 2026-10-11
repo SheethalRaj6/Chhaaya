@@ -427,10 +427,19 @@ def test_verified_font_repairs_apply_only_to_the_reviewed_pdf(tmp_path, monkeypa
 
 
 def test_reviewed_spacing_repairs_preserve_real_word_boundaries(tmp_path, monkeypatch):
-    pdf = make_pdf(tmp_path / "spaced-ligatures.pdf", [[
-        ("h", "Antenatal care"),
-        ("p", "Th is is the fi rst visit aft er registration. Check soft tissue with the mother."),
-    ]])
+    pdf = make_pdf(
+        tmp_path / "spaced-ligatures.pdf",
+        [
+            [
+                ("h", "Antenatal care"),
+                (
+                    "p",
+                    "Th is is the fi rst visit aft er registration. "
+                    "Check soft tissue with the mother.",
+                ),
+            ]
+        ],
+    )
     digest = hashlib.sha256(pdf.read_bytes()).hexdigest()
     monkeypatch.setattr(corpus, "SPACING_REPAIRS", {digest}, raising=False)
     text = " ".join(c.text for c in chunk_source(SOURCE, pdf, words))
@@ -443,11 +452,16 @@ def test_reviewed_flowchart_region_does_not_linearize_branches(tmp_path, monkeyp
     with pymupdf.open() as doc:
         page = doc.new_page()
         page.insert_text((50, 110), "Referral guidance", fontsize=15)
-        page.insert_textbox(pymupdf.Rect(50, 150, 300, 280),
-                            "If the child cannot drink, seek urgent care.", fontsize=10)
-        for box, text in [((320, 150, 550, 180), "Evaluate child"),
-                          ((320, 230, 420, 270), "YES: Admit"),
-                          ((450, 230, 550, 270), "NO: Discharge")]:
+        page.insert_textbox(
+            pymupdf.Rect(50, 150, 300, 280),
+            "If the child cannot drink, seek urgent care.",
+            fontsize=10,
+        )
+        for box, text in [
+            ((320, 150, 550, 180), "Evaluate child"),
+            ((320, 230, 420, 270), "YES: Admit"),
+            ((450, 230, 550, 270), "NO: Discharge"),
+        ]:
             rect = pymupdf.Rect(box)
             page.draw_rect(rect)
             page.insert_text((rect.x0 + 5, rect.y0 + 15), text, fontsize=8)
@@ -456,7 +470,9 @@ def test_reviewed_flowchart_region_does_not_linearize_branches(tmp_path, monkeyp
         page.draw_line((500, 200), (500, 230))
         doc.save(pdf)
     digest = hashlib.sha256(pdf.read_bytes()).hexdigest()
-    monkeypatch.setattr(corpus, "EXCLUDED_REGIONS", {digest: {1: (0.5, 0.15, 1.0, 0.52)}}, raising=False)
+    monkeypatch.setattr(
+        corpus, "EXCLUDED_REGIONS", {digest: {1: (0.5, 0.15, 1.0, 0.52)}}, raising=False
+    )
     text = " ".join(c.text for c in chunk_source(SOURCE, pdf, words))
     assert "If the child cannot drink, seek urgent care." in text
     assert "Evaluate child" not in text
@@ -474,8 +490,12 @@ def test_repeated_clinical_table_rows_in_page_margins_are_not_furniture(tmp_path
                 page.draw_line((x, 720), (x, 810))
             for y in (720, 750, 810):
                 page.draw_line((50, y), (550, y))
-            for x, y, text in [(60, 740, "Group"), (260, 740, "Threshold"),
-                               (60, 780, "Children"), (260, 780, "<7")]:
+            for x, y, text in [
+                (60, 740, "Group"),
+                (260, 740, "Threshold"),
+                (60, 780, "Children"),
+                (260, 780, "<7"),
+            ]:
                 page.insert_text((x, y), text, fontsize=10)
         doc.save(pdf)
     text = " ".join(c.text for c in chunk_source(SOURCE, pdf, words))
