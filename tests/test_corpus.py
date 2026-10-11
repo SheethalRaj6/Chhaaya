@@ -4,6 +4,7 @@ from pathlib import Path
 import httpx2
 import pymupdf
 import pytest
+from tokenizers import Tokenizer, models, pre_tokenizers
 
 from chhaaya.corpus import (
     MAX_TOKENS,
@@ -193,6 +194,31 @@ def test_numeric_table_cells_survive_while_margin_page_numbers_go(tmp_path: Path
     assert text.count("Haemoglobin threshold in g/dL 7.0") == 3
     assert text.count("Blood pressure threshold in mmHg 180 / 120") == 3
     assert not {"1", "2", "3"} & set(text.split())
+
+
+def test_subword_chunks_preserve_uneven_text_within_token_limit(tmp_path: Path):
+    vocabulary = {"[UNK]": 0, "a": 1, "p": 2}
+    vocabulary.update(
+        {f"##{letter}": i + 3 for i, letter in enumerate("abcdefghijklmnopqrstuvwxyz")}
+    )
+    tokenizer = Tokenizer(models.WordPiece(vocabulary, unk_token="[UNK]"))
+    tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+
+    def count(text: str) -> int:
+        return len(tokenizer.encode(text, add_special_tokens=False).ids)
+
+    text = " ".join(["pneumonoultramicroscopic"] * 60 + ["a"] * 250)
+    pdf = make_pdf(tmp_path / "uneven-tokens.pdf", [[("h", "Vocabulary"), ("p", text)]])
+
+    chunks = [
+        chunk
+        for chunk in chunk_source(SOURCE, pdf, count)
+        if chunk.section == "Vocabulary"
+    ]
+
+    assert " ".join(chunk.text for chunk in chunks) == text
+    assert len(chunks) >= 4
+    assert all(chunk.tokens == count(chunk.text) <= 500 for chunk in chunks)
 
 
 def test_every_chunk_keeps_its_source_and_the_page_it_starts_on(module: Path):
