@@ -18,6 +18,7 @@ import sys
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
+from itertools import groupby
 from pathlib import Path
 
 import httpx2
@@ -276,7 +277,15 @@ def _sections(pages: list[list[list[_Line]]]) -> list[_Section]:
 
     sections = [_Section(heading="", page=1, paragraphs=[])]
     for number, blocks in enumerate(pages, start=1):
-        for block in blocks:
+        # PDF blocks can contain both a heading and the following paragraph.
+        runs = (
+            list(lines)
+            for block in blocks
+            for _, lines in groupby(
+                block, key=lambda line: line.size >= body * HEADING_SCALE
+            )
+        )
+        for block in runs:
             block = [line for line in block if line.size >= body * LABEL_SCALE]
             if not block or not _WORD.search(" ".join(line.text for line in block)):
                 continue
