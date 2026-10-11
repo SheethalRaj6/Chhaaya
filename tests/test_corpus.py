@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import json
 from pathlib import Path
 
@@ -299,6 +300,48 @@ def test_unmapped_glyphs_fail_instead_of_corrupting_clinical_text(tmp_path: Path
 
     with pytest.raises(ValueError, match="unmapped-glyph.pdf.*page 1"):
         chunk_source(SOURCE, pdf, words)
+
+
+def test_verified_font_repairs_apply_only_to_the_reviewed_pdf(tmp_path, monkeypatch):
+    pdf = tmp_path / "reviewed.pdf"
+    with pymupdf.open() as doc:
+        page = doc.new_page()
+        page.insert_text((50, 140), "Ofen review matters.", fontsize=10)
+        font = doc.get_page_fonts(0)[0][0]
+        encoding = doc.get_new_xref()
+        doc.update_object(
+            encoding,
+            "<< /Type /Encoding /BaseEncoding /WinAnsiEncoding "
+            "/Differences [102 /gMissing] >>",
+        )
+        doc.xref_set_key(font, "Encoding", f"{encoding} 0 R")
+        cmap = doc.get_new_xref()
+        doc.update_object(cmap, "<<>>")
+        doc.update_stream(
+            cmap,
+            b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap "
+            b"/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) "
+            b"/Supplement 0 >> def /CMapName /test def /CMapType 2 def "
+            b"1 begincodespacerange <00> <FF> endcodespacerange "
+            b"1 beginbfchar <66> <FFFD> endbfchar endcmap "
+            b"CMapName currentdict /CMap defineresource pop end end",
+        )
+        doc.xref_set_key(font, "ToUnicode", f"{cmap} 0 R")
+        doc.save(pdf)
+    digest = hashlib.sha256(pdf.read_bytes()).hexdigest()
+    monkeypatch.setattr(
+        corpus, "GLYPH_REPAIRS", {digest: {"gMissing": "ft"}}, raising=False
+    )
+
+    chunks = chunk_source(SOURCE, pdf, words)
+    assert [chunk.text for chunk in chunks] == ["Often review matters."]
+
+    changed = tmp_path / "different.pdf"
+    with pymupdf.open(pdf) as doc:
+        doc.set_metadata({"title": "Different edition"})
+        doc.save(changed)
+    with pytest.raises(ValueError, match="different.pdf.*page 1"):
+        chunk_source(SOURCE, changed, words)
 
 
 def test_failed_build_preserves_previous_complete_corpus(tmp_path: Path, monkeypatch):
