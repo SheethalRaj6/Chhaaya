@@ -349,7 +349,6 @@ class Chunk:
 class _Line:
     text: str
     size: float
-    bold: bool
     top: float  # share of page height
     bottom: float
     table: bool = False
@@ -596,10 +595,6 @@ def _read_lines(
                         _Line(
                             text=text,
                             size=round(main["size"], 1),
-                            bold=all(
-                                s["flags"] & 16 or "bold" in s["font"].lower()
-                                for s in spans
-                            ),
                             top=rect.y0 / height,
                             bottom=rect.y1 / height,
                         )
@@ -748,7 +743,6 @@ def _table_blocks(
             line = _Line(
                 piece,
                 size,
-                False,
                 top / page.rect.height,
                 ys[index + 1] / page.rect.height,
                 table=True,
