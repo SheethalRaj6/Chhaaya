@@ -10,6 +10,7 @@ PDF page (1-based, as a viewer numbers it) where the chunk starts.
 """
 
 import csv
+import hashlib
 import json
 import math
 import re
@@ -67,6 +68,49 @@ _CONTENTS_TITLES = {"contents", "table of contents", "content", "index"}
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 TokenCounter = Callable[[str], int]
+
+# Glyph names were checked against rendered source pages. A file digest keeps
+# these font-specific mappings from being applied to another PDF or edition.
+GLYPH_REPAIRS = {
+    "da4f59dd1aa2d31ceefb2c08b4a2013e1bc42fd229c85802761eca3f3d16a815": {
+        "g308": "tt",
+        "g286": "ft",
+    },
+    "f05769734153d3ee935060fde2ab6e92b2e39ed5f0d47e9b5c56781b81e5e51d": {
+        "g332": "ft",
+        "g415": "ti",
+        "CambriaMath/951": "≥",
+    },
+}
+_REPAIRED_GAP = re.compile(r"\b([A-Za-z]*(?:tt|ft|ti)) ([a-z]+)\b")
+_REPAIRED_WORDS = {
+    "after",
+    "afterwards",
+    "allotted",
+    "attend",
+    "attendance",
+    "attendant",
+    "attended",
+    "attending",
+    "attention",
+    "attitude",
+    "better",
+    "bottle",
+    "bottles",
+    "bottom",
+    "calmette",
+    "committee",
+    "getting",
+    "ghutti",
+    "little",
+    "often",
+    "lift",
+    "time",
+    "stiffness",
+    "observation",
+    "activities",
+    "participate",
+}
 
 
 @dataclass(frozen=True)
@@ -192,6 +236,8 @@ def _read_lines(pdf: Path) -> list[list[list[_Line]]]:
     """Pages, each a list of text blocks, each a list of lines."""
     pages = []
     with pymupdf.open(pdf) as doc:
+        repairs = GLYPH_REPAIRS.get(hashlib.sha256(pdf.read_bytes()).hexdigest(), {})
+        _repair_fonts(doc, repairs)
         for page in doc:
             height = page.rect.height
             blocks = []
@@ -218,9 +264,19 @@ def _read_lines(pdf: Path) -> list[list[list[_Line]]]:
                     main = max(spans, key=lambda s: len(s["text"]))
                     # PDF text coordinates precede the page's display rotation.
                     rect = pymupdf.Rect(line["bbox"]) * page.rotation_matrix
+                    text = "".join(s["text"] for s in spans)
+                    if repairs:
+                        text = _REPAIRED_GAP.sub(
+                            lambda m: (
+                                m[1] + m[2]
+                                if (m[1] + m[2]).lower() in _REPAIRED_WORDS
+                                else m[0]
+                            ),
+                            text,
+                        )
                     lines.append(
                         _Line(
-                            text=clean_text("".join(s["text"] for s in spans)),
+                            text=clean_text(text),
                             size=round(main["size"], 1),
                             bold=all(
                                 s["flags"] & 16 or "bold" in s["font"].lower()
@@ -235,6 +291,61 @@ def _read_lines(pdf: Path) -> list[list[list[_Line]]]:
                     blocks.append((min(positions), lines))
             pages.append([lines for _, lines in sorted(blocks, key=lambda b: b[0])])
     return pages
+
+
+def _repair_fonts(doc: pymupdf.Document, repairs: dict[str, str]) -> None:
+    """Repair reviewed Type1 glyph mappings in memory, leaving the PDF intact."""
+    if not repairs:
+        return
+    fonts = {
+        font[0]: font[3].split("+")[-1]
+        for number in range(len(doc))
+        for font in doc.get_page_fonts(number)
+    }
+    for font, name in fonts.items():
+        kind, reference = doc.xref_get_key(font, "Encoding")
+        entries = []
+        if kind == "xref":
+            encoding = int(reference.split()[0])
+            _, differences = doc.xref_get_key(encoding, "Differences")
+            code = 0
+            for token in re.findall(r"/[A-Za-z0-9_.]+|[0-9]+", differences):
+                if token.isdecimal():
+                    code = int(token)
+                    continue
+                if replacement := repairs.get(token[1:]):
+                    value = replacement.encode("utf-16-be").hex()
+                    entries.append(f"<{code:02x}> <{value}>")
+                code += 1
+        elif kind == "name" and reference == "/Identity-H":
+            for key, replacement in repairs.items():
+                if key.startswith(f"{name}/"):
+                    code = int(key.split("/")[1])
+                    value = replacement.encode("utf-16-be").hex()
+                    entries.append(f"<{code:04x}> <{value}>")
+        if not entries:
+            continue
+        kind, reference = doc.xref_get_key(font, "ToUnicode")
+        if kind == "xref":
+            cmap_xref = int(reference.split()[0])
+            cmap = doc.xref_stream(cmap_xref)
+        else:
+            cmap_xref = doc.get_new_xref()
+            doc.update_object(cmap_xref, "<<>>")
+            doc.xref_set_key(font, "ToUnicode", f"{cmap_xref} 0 R")
+            cmap = (
+                b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap "
+                b"/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) "
+                b"/Supplement 0 >> def /CMapName /Chhaaya def /CMapType 2 def "
+                b"1 begincodespacerange <00> <FF> endcodespacerange endcmap "
+                b"CMapName currentdict /CMap defineresource pop end end"
+            )
+        if cmap.count(b"endcmap") != 1:
+            raise ValueError(f"font {font}: malformed ToUnicode map")
+        patch = (
+            f"{len(entries)} beginbfchar\n" + "\n".join(entries) + "\nendbfchar\n"
+        ).encode()
+        doc.update_stream(cmap_xref, cmap.replace(b"endcmap", patch + b"endcmap"))
 
 
 def _margin_key(line: _Line) -> str | None:
