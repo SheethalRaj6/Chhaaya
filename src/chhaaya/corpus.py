@@ -304,18 +304,54 @@ CURATED_EXCERPTS = {
     ),
 }
 
-# These reviewed figures need curves/arrows, and the quiz includes wrong answers.
-# Neither is patient guidance. Surrounding narrative and original PDFs remain.
+# These reviewed figures need curves/arrows, the quiz includes wrong answers, and
+# the blank planning and reporting forms only hold field labels. None is patient
+# guidance. Surrounding narrative, form instructions and original PDFs remain.
 EXCLUDED_REGIONS = {
     "8e136a6492ef5b0ffd9df2a835c43579f4b039c1d734cf38dfd6aaa7b085ae27": {
         68: (0.0, 0.0, 1.0, 1.0),  # newborn-resuscitation flowchart
         89: (0.0, 0.0, 1.0, 1.0),  # postpartum-haemorrhage flowchart
+        126: (0.0, 0.0, 1.0, 1.0),  # blank referral slip
+        127: (0.0, 0.0, 1.0, 1.0),
     },
     "95fa96e625b4b71e358af904288a6a854b29f12dae93e548ac963901aa10a298": {
         35: (0.0, 0.0, 1.0, 0.755),  # TB cascade diagrams; bottom prose retained
     },
     "e65aa796e20d40652dd86cdda573b64a979048dd8970f11b7f628cd2f1b34957": {
         5: (0.0, 0.0, 1.0, 1.0),  # unanswered multiple-choice assessment
+        30: (0.0, 0.0, 1.0, 1.0),  # blank IDCF planning and reporting formats
+        31: (0.0, 0.0, 1.0, 1.0),
+        32: (0.0, 0.0, 1.0, 1.0),
+        33: (0.0, 0.0, 1.0, 1.0),
+    },
+    "e97a39106ecdf37a51721ef5054715ccf79180c4e00a54ea4e6e60d1e2f8327e": {
+        48: (0.0, 0.0, 1.0, 1.0),  # blank RI microplanning Forms 1-11
+        50: (0.0, 0.0, 1.0, 1.0),
+        56: (0.0, 0.0, 1.0, 1.0),
+        58: (0.0, 0.0, 1.0, 1.0),
+        60: (0.0, 0.0, 1.0, 1.0),
+        64: (0.0, 0.0, 1.0, 1.0),
+        66: (0.0, 0.0, 1.0, 1.0),
+        69: (0.0, 0.0, 1.0, 1.0),
+        71: (0.0, 0.0, 1.0, 1.0),
+        73: (0.0, 0.0, 1.0, 1.0),
+        74: (0.0, 0.0, 1.0, 1.0),
+    },
+    "a2acc3e9efa3d1ded7df5bcc357735bac04b4acc6c3f53674bc836c89b968f9d": {
+        143: (0.0, 0.0, 1.0, 1.0),  # Annexure 6 blank reporting forms
+        144: (0.0, 0.0, 1.0, 1.0),
+        145: (0.0, 0.0, 1.0, 1.0),
+        146: (0.0, 0.0, 1.0, 1.0),
+        147: (0.0, 0.0, 1.0, 1.0),
+        148: (0.0, 0.0, 1.0, 1.0),
+        149: (0.0, 0.0, 1.0, 1.0),
+        150: (0.0, 0.0, 1.0, 1.0),
+        151: (0.0, 0.0, 1.0, 1.0),
+        152: (0.0, 0.0, 1.0, 1.0),
+        153: (0.0, 0.0, 1.0, 1.0),
+        154: (0.0, 0.0, 1.0, 1.0),
+        155: (0.0, 0.0, 1.0, 1.0),
+        156: (0.0, 0.0, 1.0, 1.0),
     },
 }
 
